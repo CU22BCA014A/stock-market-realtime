@@ -1,0 +1,137 @@
+#!/bin/bash
+# SETUP.SH - Automated Setup Script
+# Run this to set up the entire project automatically
+
+set -e
+
+echo "═════════════════════════════════════════════════════════════"
+echo "   Real-Time Stock Market Analysis System - Setup Script"
+echo "═════════════════════════════════════════════════════════════"
+echo ""
+
+# Check Docker installation
+echo "[1/6] Checking Docker installation..."
+if ! command -v docker &> /dev/null; then
+    echo "❌ Docker not found. Please install Docker first."
+    exit 1
+fi
+echo "✅ Docker found: $(docker --version)"
+
+# Check Docker Compose
+echo "[2/6] Checking Docker Compose..."
+if ! command -v docker-compose &> /dev/null; then
+    echo "❌ Docker Compose not found. Please install Docker Compose."
+    exit 1
+fi
+echo "✅ Docker Compose found: $(docker-compose --version)"
+
+# Check Python
+echo "[3/6] Checking Python installation..."
+if ! command -v python3 &> /dev/null; then
+    echo "❌ Python 3 not found. Please install Python 3.8 or higher."
+    exit 1
+fi
+echo "✅ Python found: $(python3 --version)"
+
+# Create logs directory
+echo "[4/6] Creating logs directory..."
+mkdir -p logs
+echo "✅ Logs directory created"
+
+# Copy environment file if needed
+if [ ! -f .env ]; then
+    echo "[5/6] Setting up environment file..."
+    cp .env.example .env 2>/dev/null || echo "KAFKA_BOOTSTRAP_SERVERS=localhost:9092" > .env
+    echo "✅ Environment file created"
+else
+    echo "[5/6] Environment file already exists"
+fi
+
+# Start Docker services
+echo "[6/6] Starting Docker services..."
+echo "   - PostgreSQL"
+echo "   - Zookeeper"
+echo "   - Kafka"
+echo "   - Superset"
+echo "   - pgAdmin"
+echo ""
+echo "⏳ This may take 2-3 minutes on first run..."
+docker-compose up -d
+
+# Wait for services to be ready
+echo ""
+echo "⏳ Waiting for services to start..."
+sleep 10
+
+# Check if services are running
+echo ""
+echo "═════════════════════════════════════════════════════════════"
+echo "   SETUP COMPLETE ✅"
+echo "═════════════════════════════════════════════════════════════"
+echo ""
+
+echo "Services Status:"
+echo "───────────────────────────────────────────────────────────"
+
+# PostgreSQL
+if docker ps | grep -q stock_postgres; then
+    echo "✅ PostgreSQL     - Running (localhost:5432)"
+else
+    echo "❌ PostgreSQL     - Failed to start"
+fi
+
+# Kafka
+if docker ps | grep -q stock_kafka; then
+    echo "✅ Kafka          - Running (localhost:9092)"
+else
+    echo "❌ Kafka          - Failed to start"
+fi
+
+# Superset
+if docker ps | grep -q stock_superset; then
+    echo "✅ Superset       - Running (localhost:8088)"
+else
+    echo "❌ Superset       - Failed to start"
+fi
+
+# pgAdmin
+if docker ps | grep -q stock_pgadmin; then
+    echo "✅ pgAdmin        - Running (localhost:5050)"
+else
+    echo "❌ pgAdmin        - Failed to start"
+fi
+
+echo "───────────────────────────────────────────────────────────"
+echo ""
+
+# Install Python dependencies
+echo "Installing Python dependencies..."
+pip3 install -q -r requirements.txt
+echo "✅ Dependencies installed"
+
+echo ""
+echo "═════════════════════════════════════════════════════════════"
+echo "   NEXT STEPS"
+echo "═════════════════════════════════════════════════════════════"
+echo ""
+echo "1. Start the Producer (Terminal 1):"
+echo "   $ python producer.py"
+echo ""
+echo "2. Start the Consumer (Terminal 2):"
+echo "   $ python consumer.py"
+echo ""
+echo "3. Access the Dashboard (Terminal 3):"
+echo "   Open browser: http://localhost:8088"
+echo "   Login: admin / admin"
+echo ""
+echo "4. Monitor Database (Terminal 4):"
+echo "   $ psql -h localhost -U postgres -d stock_market"
+echo ""
+echo "5. Monitor Logs:"
+echo "   $ tail -f logs/producer.log"
+echo "   $ tail -f logs/consumer.log"
+echo ""
+echo "═════════════════════════════════════════════════════════════"
+echo ""
+echo "🎉 Setup Complete! Your real-time analysis system is ready."
+echo ""

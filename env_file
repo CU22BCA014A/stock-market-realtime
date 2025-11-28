@@ -1,0 +1,33 @@
+# .ENV - Environment Variables
+# Copy this file to .env and update values as needed
+
+# ==================== KAFKA SETTINGS ====================
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+KAFKA_TOPIC=stock-prices
+KAFKA_CONSUMER_GROUP=stock-analysis-group
+KAFKA_AUTO_OFFSET_RESET=latest
+
+# ==================== DATABASE SETTINGS ====================
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=stock_market
+DB_USER=postgres
+DB_PASSWORD=postgres123
+
+# ==================== SUPERSET SETTINGS ====================
+SUPERSET_URL=http://localhost:8088
+SUPERSET_ADMIN_USER=admin
+SUPERSET_ADMIN_PASSWORD=admin
+
+# ==================== APPLICATION SETTINGS ====================
+DEBUG=False
+LOG_LEVEL=INFO
+
+# ==================== PRODUCER SETTINGS ====================
+PRODUCER_INTERVAL=5
+PRODUCER_STOCKS=AAPL,GOOGL,MSFT,TSLA,AMZN
+
+# ==================== METRICS SETTINGS ====================
+SMA_PERIOD=20
+VOLATILITY_PERIOD=14
+MOMENTUM_PERIOD=14

@@ -1,0 +1,98 @@
+"""
+CONFIG.PY - Configuration Settings
+Centralized configuration for the entire system
+"""
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# ==================== KAFKA CONFIGURATION ====================
+KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+KAFKA_TOPIC = os.getenv('KAFKA_TOPIC', 'stock-prices')
+KAFKA_CONSUMER_GROUP = os.getenv('KAFKA_CONSUMER_GROUP', 'stock-analysis-group')
+KAFKA_AUTO_OFFSET_RESET = os.getenv('KAFKA_AUTO_OFFSET_RESET', 'latest')
+
+# ==================== DATABASE CONFIGURATION ====================
+DATABASE_CONFIG = {
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'port': int(os.getenv('DB_PORT', 5432)),
+    'database': os.getenv('DB_NAME', 'stock_market'),
+    'user': os.getenv('DB_USER', 'postgres'),
+    'password': os.getenv('DB_PASSWORD', 'postgres123')
+}
+
+# ==================== PRODUCER CONFIGURATION ====================
+PRODUCER_CONFIG = {
+    'stocks': ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN'],
+    'interval_seconds': 5,  # Data published every 5 seconds
+    'batch_size': 5  # Publish all stocks as batch
+}
+
+PRICE_RANGES = {
+    'AAPL': (150, 200),
+    'GOOGL': (100, 150),
+    'MSFT': (300, 350),
+    'TSLA': (200, 300),
+    'AMZN': (150, 200)
+}
+
+# ==================== METRICS CALCULATION ====================
+METRICS_CONFIG = {
+    'sma_period': 20,           # Simple Moving Average period
+    'volatility_period': 14,    # Volatility calculation period
+    'momentum_period': 14,      # Momentum (RSI) period
+    'support_resistance_window': 10  # Number of periods for S/R levels
+}
+
+# ==================== LOGGING CONFIGURATION ====================
+LOGGING_CONFIG = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[%(asctime)s] %(levelname)s - %(name)s - %(message)s'
+        },
+        'simple': {
+            'format': '%(levelname)s - %(message)s'
+        }
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+            'level': 'INFO'
+        },
+        'file': {
+            'class': 'logging.FileHandler',
+            'filename': 'logs/app.log',
+            'formatter': 'verbose',
+            'level': 'DEBUG'
+        }
+    },
+    'root': {
+        'handlers': ['console', 'file'],
+        'level': 'INFO'
+    }
+}
+
+# ==================== SUPERSET CONFIGURATION ====================
+SUPERSET_CONFIG = {
+    'url': 'http://localhost:8088',
+    'admin_user': 'admin',
+    'admin_password': 'admin',
+    'database_uri': f"postgresql://{DATABASE_CONFIG['user']}:{DATABASE_CONFIG['password']}@{DATABASE_CONFIG['host']}:{DATABASE_CONFIG['port']}/{DATABASE_CONFIG['database']}"
+}
+
+# ==================== PERFORMANCE SETTINGS ====================
+PERFORMANCE_CONFIG = {
+    'batch_insert_size': 100,   # Insert metrics in batches
+    'connection_pool_size': 5,  # PostgreSQL connection pool
+    'query_timeout': 30,        # Query timeout in seconds
+    'retry_attempts': 3,        # Retry failed operations
+    'retry_delay': 2            # Delay between retries (seconds)
+}
+
+# ==================== DEBUG MODE ====================
+DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'

@@ -1,0 +1,343 @@
+"""
+CONSUMER.PY - Kafka Consumer & Stream Processor
+Processes real-time stock data, calculates metrics, and stores in PostgreSQL
+"""
+
+import json
+import time
+from datetime import datetime, timedelta
+from kafka import KafkaConsumer
+from collections import defaultdict, deque
+import psycopg2
+from psycopg2.extras import execute_values
+import numpy as np
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Configuration
+KAFKA_BROKER = 'localhost:9092'
+KAFKA_TOPIC = 'stock-prices'
+KAFKA_GROUP = 'stock-analysis-group'
+
+# PostgreSQL Configuration
+DB_CONFIG = {
+    'host': 'localhost',
+    'port': 5432,
+    'database': 'stock_market',
+    'user': 'postgres',
+    'password': 'postgres123'
+}
+
+# In-memory storage for calculations (20-period for SMA)
+price_history = defaultdict(lambda: deque(maxlen=20))
+volatility_history = defaultdict(lambda: deque(maxlen=14))
+
+class DatabaseManager:
+    """Handles PostgreSQL operations"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.conn = None
+        self.connect()
+    
+    def connect(self):
+        """Establish database connection"""
+        try:
+            self.conn = psycopg2.connect(**self.config)
+            logger.info("✅ Connected to PostgreSQL")
+        except Exception as e:
+            logger.error(f"❌ Database connection failed: {str(e)}")
+            raise
+    
+    def create_tables(self):
+        """Create necessary tables if they don't exist"""
+        try:
+            cursor = self.conn.cursor()
+            
+            # Stock prices table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS stock_prices (
+                    id SERIAL PRIMARY KEY,
+                    symbol VARCHAR(10) NOT NULL,
+                    price DECIMAL(10, 2),
+                    volume BIGINT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    open_price DECIMAL(10, 2),
+                    close_price DECIMAL(10, 2),
+                    high_price DECIMAL(10, 2),
+                    low_price DECIMAL(10, 2),
+                    change_pct DECIMAL(5, 2)
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_symbol_timestamp 
+                ON stock_prices(symbol, timestamp DESC);
+            """)
+            
+            # Metrics table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS metrics (
+                    id SERIAL PRIMARY KEY,
+                    symbol VARCHAR(10) NOT NULL,
+                    current_price DECIMAL(10, 2),
+                    volatility DECIMAL(5, 2),
+                    sma_20 DECIMAL(10, 2),
+                    price_change_pct DECIMAL(5, 2),
+                    anomaly_score DECIMAL(5, 2),
+                    trend_prediction VARCHAR(20),
+                    momentum_index DECIMAL(5, 2),
+                    support_level DECIMAL(10, 2),
+                    resistance_level DECIMAL(10, 2),
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_metrics_symbol_timestamp 
+                ON metrics(symbol, timestamp DESC);
+            """)
+            
+            self.conn.commit()
+            logger.info("✅ Database tables created/verified")
+        except Exception as e:
+            logger.error(f"❌ Error creating tables: {str(e)}")
+            self.conn.rollback()
+            raise
+    
+    def insert_price(self, data):
+        """Insert raw price data"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO stock_prices 
+                (symbol, price, volume, open_price, close_price, high_price, low_price, change_pct, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                data['symbol'], data['price'], data['volume'],
+                data['open_price'], data['close_price'],
+                data['high_price'], data['low_price'],
+                data['change_pct'], data['timestamp']
+            ))
+            self.conn.commit()
+        except Exception as e:
+            logger.error(f"❌ Error inserting price: {str(e)}")
+            self.conn.rollback()
+    
+    def insert_metrics(self, metrics_data):
+        """Insert calculated metrics"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO metrics 
+                (symbol, current_price, volatility, sma_20, price_change_pct, 
+                 anomaly_score, trend_prediction, momentum_index, support_level, 
+                 resistance_level, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, tuple(metrics_data.values()))
+            self.conn.commit()
+        except Exception as e:
+            logger.error(f"❌ Error inserting metrics: {str(e)}")
+            self.conn.rollback()
+    
+    def close(self):
+        """Close database connection"""
+        if self.conn:
+            self.conn.close()
+            logger.info("Database connection closed")
+
+class MetricsCalculator:
+    """Calculates all 10 metrics"""
+    
+    @staticmethod
+    def calculate_sma(prices, period=20):
+        """Calculate Simple Moving Average"""
+        if len(prices) < period:
+            return None
+        return float(np.mean(list(prices)[-period:]))
+    
+    @staticmethod
+    def calculate_volatility(prices, period=14):
+        """Calculate volatility (standard deviation of returns)"""
+        if len(prices) < 2:
+            return 0
+        
+        prices_list = list(prices)
+        returns = []
+        for i in range(1, len(prices_list)):
+            ret = (prices_list[i] - prices_list[i-1]) / prices_list[i-1] * 100
+            returns.append(ret)
+        
+        if len(returns) < period:
+            period = len(returns)
+        
+        return float(np.std(returns[-period:]))
+    
+    @staticmethod
+    def calculate_anomaly_score(current_price, sma, volatility):
+        """Calculate anomaly score (0-100)"""
+        if sma is None or volatility == 0:
+            return 0
+        
+        deviation = abs(current_price - sma) / sma * 100
+        anomaly = min(100, (deviation / (volatility + 0.01)) * 10)
+        return round(anomaly, 2)
+    
+    @staticmethod
+    def calculate_trend_prediction(prices):
+        """Predict trend direction"""
+        if len(prices) < 3:
+            return "NEUTRAL"
+        
+        prices_list = list(prices)
+        recent_avg = np.mean(prices_list[-5:])
+        older_avg = np.mean(prices_list[-10:-5])
+        
+        change_pct = (recent_avg - older_avg) / older_avg * 100
+        
+        if change_pct > 1:
+            return "UPTREND"
+        elif change_pct < -1:
+            return "DOWNTREND"
+        else:
+            return "NEUTRAL"
+    
+    @staticmethod
+    def calculate_momentum_index(prices, period=14):
+        """Calculate RSI-based momentum (0-100)"""
+        if len(prices) < period + 1:
+            return 50
+        
+        prices_list = list(prices)
+        gains = []
+        losses = []
+        
+        for i in range(len(prices_list) - period, len(prices_list)):
+            change = prices_list[i] - prices_list[i-1]
+            if change > 0:
+                gains.append(change)
+                losses.append(0)
+            else:
+                gains.append(0)
+                losses.append(abs(change))
+        
+        avg_gain = np.mean(gains) if gains else 0
+        avg_loss = np.mean(losses) if losses else 0
+        
+        if avg_loss == 0:
+            return 100 if avg_gain > 0 else 50
+        
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        return round(rsi, 2)
+    
+    @staticmethod
+    def calculate_support_resistance(prices):
+        """Calculate support and resistance levels"""
+        if len(prices) < 5:
+            return None, None
+        
+        prices_list = list(prices)[-10:]
+        support = float(np.min(prices_list))
+        resistance = float(np.max(prices_list))
+        
+        return round(support, 2), round(resistance, 2)
+
+def process_message(message_data, db_manager):
+    """Process incoming message and calculate metrics"""
+    try:
+        symbol = message_data['symbol']
+        current_price = message_data['price']
+        
+        # Store price history
+        price_history[symbol].append(current_price)
+        
+        # Insert raw data
+        db_manager.insert_price(message_data)
+        
+        # Calculate metrics
+        sma_20 = MetricsCalculator.calculate_sma(price_history[symbol], 20)
+        volatility = MetricsCalculator.calculate_volatility(price_history[symbol], 14)
+        anomaly_score = MetricsCalculator.calculate_anomaly_score(current_price, sma_20, volatility)
+        trend = MetricsCalculator.calculate_trend_prediction(price_history[symbol])
+        momentum = MetricsCalculator.calculate_momentum_index(price_history[symbol], 14)
+        support, resistance = MetricsCalculator.calculate_support_resistance(price_history[symbol])
+        
+        # Prepare metrics data
+        metrics_data = {
+            'symbol': symbol,
+            'current_price': current_price,
+            'volatility': round(volatility, 2),
+            'sma_20': round(sma_20, 2) if sma_20 else None,
+            'price_change_pct': message_data['change_pct'],
+            'anomaly_score': anomaly_score,
+            'trend_prediction': trend,
+            'momentum_index': momentum,
+            'support_level': support,
+            'resistance_level': resistance,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Insert metrics
+        db_manager.insert_metrics(metrics_data)
+        
+        logger.info(
+            f"📊 [{symbol}] Price: ${current_price} | "
+            f"SMA20: ${sma_20:.2f if sma_20 else 'N/A'} | "
+            f"Vol: {volatility:.2f}% | "
+            f"Anomaly: {anomaly_score} | "
+            f"Trend: {trend} | "
+            f"Momentum: {momentum:.2f}"
+        )
+        
+        return metrics_data
+    
+    except Exception as e:
+        logger.error(f"❌ Error processing message: {str(e)}")
+
+def main():
+    """Main consumer function"""
+    db_manager = None
+    consumer = None
+    
+    try:
+        # Initialize database
+        db_manager = DatabaseManager(DB_CONFIG)
+        db_manager.create_tables()
+        
+        # Initialize Kafka Consumer
+        consumer = KafkaConsumer(
+            KAFKA_TOPIC,
+            bootstrap_servers=[KAFKA_BROKER],
+            group_id=KAFKA_GROUP,
+            value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+            auto_offset_reset='latest',
+            enable_auto_commit=True
+        )
+        
+        logger.info(f"✅ Consumer connected to {KAFKA_BROKER}")
+        logger.info(f"📨 Listening to topic: {KAFKA_TOPIC}")
+        logger.info("🔄 Processing real-time data...")
+        
+        message_count = 0
+        
+        # Consume messages
+        for message in consumer:
+            message_data = message.value
+            process_message(message_data, db_manager)
+            message_count += 1
+            
+            # Log statistics every 10 messages
+            if message_count % 10 == 0:
+                logger.info(f"✅ Processed {message_count} total messages")
+    
+    except Exception as e:
+        logger.error(f"❌ Consumer error: {str(e)}")
+    finally:
+        if consumer:
+            consumer.close()
+        if db_manager:
+            db_manager.close()
+        logger.info("Consumer closed")
+
+if __name__ == '__main__':
+    main()
